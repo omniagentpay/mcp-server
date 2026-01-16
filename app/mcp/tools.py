@@ -1,11 +1,9 @@
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
 from app.mcp.registry import registry, BaseTool
 from app.payments.service import get_payment_orchestrator
 from app.payments.omni_client import OmniAgentPaymentClient
-from app.wallets.service import WalletService
 
 logger = structlog.get_logger(__name__)
 
@@ -29,7 +27,7 @@ class CreateAgentWalletTool(BaseTool):
             "required": ["agent_name"]
         }
 
-    async def execute(self, db: AsyncSession, agent_name: str) -> Dict[str, Any]:
+    async def execute(self, agent_name: str) -> Dict[str, Any]:
         logger.info("mcp_tool_call", tool=self.name, agent_name=agent_name)
         client = await OmniAgentPaymentClient.get_instance()
         try:
@@ -62,7 +60,7 @@ class PayRecipientTool(BaseTool):
             "required": ["from_wallet_id", "to_address", "amount"]
         }
 
-    async def execute(self, db: AsyncSession, **kwargs) -> Dict[str, Any]:
+    async def execute(self, **kwargs) -> Dict[str, Any]:
         logger.info("mcp_tool_call", tool=self.name, **kwargs)
         orchestrator = await get_payment_orchestrator()
         try:
@@ -95,7 +93,7 @@ class SimulatePaymentTool(BaseTool):
             "required": ["from_wallet_id", "to_address", "amount"]
         }
 
-    async def execute(self, db: AsyncSession, from_wallet_id: str, to_address: str, amount: str, currency: str = "USD") -> Dict[str, Any]:
+    async def execute(self, from_wallet_id: str, to_address: str, amount: str, currency: str = "USD") -> Dict[str, Any]:
         logger.info("mcp_tool_call", tool=self.name, from_wallet_id=from_wallet_id, amount=amount)
         client = await OmniAgentPaymentClient.get_instance()
         try:
@@ -134,7 +132,7 @@ class CreatePaymentIntentTool(BaseTool):
             "required": ["wallet_id", "recipient", "amount"]
         }
 
-    async def execute(self, db: AsyncSession, wallet_id: str, recipient: str, amount: str, currency: str = "USD", metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def execute(self, wallet_id: str, recipient: str, amount: str, currency: str = "USD", metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         logger.info("mcp_tool_call", tool=self.name, amount=amount)
         client = await OmniAgentPaymentClient.get_instance()
         try:
@@ -170,7 +168,7 @@ class ConfirmPaymentIntentTool(BaseTool):
             "required": ["intent_id"]
         }
 
-    async def execute(self, db: AsyncSession, intent_id: str) -> Dict[str, Any]:
+    async def execute(self, intent_id: str) -> Dict[str, Any]:
         logger.info("mcp_tool_call", tool=self.name, intent_id=intent_id)
         client = await OmniAgentPaymentClient.get_instance()
         try:
@@ -200,7 +198,7 @@ class CheckBalanceTool(BaseTool):
             "required": ["wallet_id"]
         }
 
-    async def execute(self, db: AsyncSession, wallet_id: str) -> Dict[str, Any]:
+    async def execute(self, wallet_id: str) -> Dict[str, Any]:
         logger.info("mcp_tool_call", tool=self.name, wallet_id=wallet_id)
         client = await OmniAgentPaymentClient.get_instance()
         try:
@@ -208,4 +206,69 @@ class CheckBalanceTool(BaseTool):
             return {"status": "success", **result}
         except Exception as e:
             logger.error("check_balance_tool_failed", error=str(e))
+            return {"status": "error", "message": str(e)}
+
+@registry.register
+class RemoveRecipientGuardTool(BaseTool):
+    @property
+    def name(self) -> str:
+        return "remove_recipient_guard"
+
+    @property
+    def description(self) -> str:
+        return "Remove the recipient whitelist guard from a wallet to allow payments to any address"
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "wallet_id": {"type": "string", "description": "Wallet ID to remove recipient guard from"}
+            },
+            "required": ["wallet_id"]
+        }
+
+    async def execute(self, wallet_id: str) -> Dict[str, Any]:
+        logger.info("mcp_tool_call", tool=self.name, wallet_id=wallet_id)
+        client = await OmniAgentPaymentClient.get_instance()
+        try:
+            result = await client.remove_recipient_guard(wallet_id)
+            return {"status": "success", **result}
+        except Exception as e:
+            logger.error("remove_recipient_guard_tool_failed", error=str(e))
+            return {"status": "error", "message": str(e)}
+
+@registry.register
+class AddRecipientToWhitelistTool(BaseTool):
+    @property
+    def name(self) -> str:
+        return "add_recipient_to_whitelist"
+
+    @property
+    def description(self) -> str:
+        return "Add recipient addresses to the whitelist for a wallet"
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "wallet_id": {"type": "string", "description": "Wallet ID"},
+                "addresses": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of recipient addresses to whitelist"
+                }
+            },
+            "required": ["wallet_id", "addresses"]
+        }
+
+    async def execute(self, wallet_id: str, addresses: List[str]) -> Dict[str, Any]:
+        logger.info("mcp_tool_call", tool=self.name, wallet_id=wallet_id, addresses=addresses)
+        client = await OmniAgentPaymentClient.get_instance()
+        try:
+            result = await client.add_recipient_to_whitelist(wallet_id, addresses)
+            return {"status": "success", **result}
+        except Exception as e:
+            logger.error("add_recipient_to_whitelist_tool_failed", error=str(e))
             return {"status": "error", "message": str(e)}

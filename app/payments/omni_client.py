@@ -1,6 +1,7 @@
 import asyncio
 import structlog
-from typing import Any, Dict, Optional
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
 from omniagentpay import OmniAgentPay
 from omniagentpay.core.types import Network
 from app.core.config import settings
@@ -59,10 +60,13 @@ class OmniAgentPaymentClient(AbstractPaymentClient):
             wallet_id=wallet_id,
             max_amount=settings.OMNIAGENTPAY_TX_LIMIT
         )
-        await self._client.add_recipient_guard(
-            wallet_id=wallet_id,
-            addresses=settings.OMNIAGENTPAY_WHITELISTED_RECIPIENTS
-        )
+        # Only add recipient guard if whitelist is not empty
+        # Empty whitelist would block all payments
+        if settings.OMNIAGENTPAY_WHITELISTED_RECIPIENTS:
+            await self._client.add_recipient_guard(
+                wallet_id=wallet_id,
+                addresses=settings.OMNIAGENTPAY_WHITELISTED_RECIPIENTS
+            )
 
         return {
             "wallet_id": wallet_id,
@@ -87,10 +91,12 @@ class OmniAgentPaymentClient(AbstractPaymentClient):
             wallet_id=wallet_id,
             max_amount=settings.OMNIAGENTPAY_TX_LIMIT
         )
-        await self._client.add_recipient_guard(
-            wallet_id=wallet_id,
-            addresses=settings.OMNIAGENTPAY_WHITELISTED_RECIPIENTS
-        )
+        # Only add recipient guard if whitelist is not empty
+        if settings.OMNIAGENTPAY_WHITELISTED_RECIPIENTS:
+            await self._client.add_recipient_guard(
+                wallet_id=wallet_id,
+                addresses=settings.OMNIAGENTPAY_WHITELISTED_RECIPIENTS
+            )
         return {"status": "guards_applied", "wallet_id": wallet_id}
 
     async def simulate_payment(
@@ -143,6 +149,25 @@ class OmniAgentPaymentClient(AbstractPaymentClient):
         currency: str = "USD", 
         metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
+        # Pre-check balance before creating intent for faster failure and clearer errors
+        try:
+            balance_info = await self.get_wallet_usdc_balance(wallet_id)
+            balance = Decimal(balance_info.get('usdc_balance', '0'))
+            amount_decimal = Decimal(str(amount))
+            
+            if balance < amount_decimal:
+                raise Exception(
+                    f"Insufficient balance: Wallet has {balance} USDC, but {amount_decimal} USDC is required. "
+                    f"Please fund the wallet before creating payment intents."
+                )
+        except Exception as balance_error:
+            # If it's already a balance error, re-raise it
+            error_msg = str(balance_error).lower()
+            if "insufficient" in error_msg or "no usdc" in error_msg or "balance" in error_msg:
+                raise balance_error
+            # If balance check itself failed, log but continue (simulation will catch it)
+            logger.warning("balance_precheck_failed", error=str(balance_error))
+        
         # Extract purpose and exclude it from kwargs to avoid duplicate argument
         purpose = None
         kwargs = {}
@@ -190,13 +215,44 @@ class OmniAgentPaymentClient(AbstractPaymentClient):
             raise
 
     async def confirm_intent(self, intent_id: str) -> Dict[str, Any]:
-        result = await self._client.confirm_payment_intent(intent_id=intent_id)
-        # Fix: Use correct attributes for PaymentResult
-        return {
-            "intent_id": result.transaction_id,
-            "status": result.status,
-            "transaction_id": result.transaction_id
-        }
+        try:
+            result = await self._client.confirm_payment_intent(intent_id=intent_id)
+            # Return comprehensive payment result
+            return {
+                "intent_id": intent_id,
+                "status": result.status,
+                "success": result.success,
+                "transaction_id": result.transaction_id,
+                "blockchain_tx": result.blockchain_tx,
+                "amount": str(result.amount),
+                "recipient": result.recipient,
+                "message": "Payment executed successfully" if result.success else f"Payment execution failed: {result.error or 'Unknown error'}"
+            }
+        except Exception as e:
+            error_msg = str(e)
+            # Provide helpful error messages
+            if "no USDC balance" in error_msg.lower() or "balance check failed" in error_msg.lower() or "insufficient balance" in error_msg.lower():
+                # Try to get intent details for better error message
+                try:
+                    intent = await self._client.get_payment_intent(intent_id)
+                    if intent:
+                        balance_info = await self.get_wallet_usdc_balance(intent.wallet_id)
+                        balance = balance_info.get('usdc_balance', '0')
+                        raise Exception(
+                            f"Payment confirmation failed: Wallet has insufficient USDC balance. "
+                            f"Required: {intent.amount} USDC, Current balance: {balance} USDC. "
+                            f"Please fund the wallet before confirming the payment intent."
+                        ) from e
+                except Exception:
+                    pass
+            
+            if "not found" in error_msg.lower():
+                raise Exception(f"Payment intent not found: {intent_id}. Please check the intent_id and try again.") from e
+            
+            if "cannot be confirmed" in error_msg.lower() or "status" in error_msg.lower():
+                raise Exception(f"Cannot confirm payment intent: {error_msg}. The intent may have already been confirmed or cancelled.") from e
+            
+            raise
 
     async def get_wallet_usdc_balance(self, wallet_id: str) -> Dict[str, Any]:
         """Get the actual Circle wallet USDC balance."""
@@ -209,8 +265,8 @@ class OmniAgentPaymentClient(AbstractPaymentClient):
             }
         except Exception as e:
             # If wallet has no USDC, return 0 instead of error
-            error_msg = str(e)
-            if "no USDC balance" in error_msg.lower():
+            error_msg = str(e).lower()
+            if "no usdc balance" in error_msg or "has no usdc" in error_msg:
                 return {
                     "wallet_id": wallet_id,
                     "usdc_balance": "0",
@@ -218,3 +274,40 @@ class OmniAgentPaymentClient(AbstractPaymentClient):
                     "note": "Wallet has no USDC balance. Funds need to be deposited to the wallet address."
                 }
             raise
+
+    async def remove_recipient_guard(self, wallet_id: str) -> Dict[str, Any]:
+        """Remove the recipient guard from a wallet to allow payments to any address."""
+        try:
+            # Remove guard by name "recipient"
+            removed = await self._client._guard_manager.remove_guard(wallet_id, "recipient")
+            if removed:
+                return {"status": "success", "message": "Recipient guard removed. Wallet can now pay to any address."}
+            else:
+                return {"status": "info", "message": "Recipient guard not found on this wallet."}
+        except Exception as e:
+            raise Exception(f"Failed to remove recipient guard: {str(e)}") from e
+
+    async def add_recipient_to_whitelist(self, wallet_id: str, addresses: List[str]) -> Dict[str, Any]:
+        """Add recipient addresses to the whitelist. Removes and re-adds the guard with updated addresses."""
+        try:
+            # Get current guards to check if recipient guard exists
+            guard_names = await self._client.list_guards(wallet_id)
+            
+            # Remove existing recipient guard if it exists
+            if "recipient" in guard_names:
+                await self._client._guard_manager.remove_guard(wallet_id, "recipient")
+            
+            # Add recipient guard with new addresses
+            await self._client.add_recipient_guard(
+                wallet_id=wallet_id,
+                mode="whitelist",
+                addresses=addresses
+            )
+            
+            return {
+                "status": "success",
+                "message": f"Recipient guard updated. Whitelisted addresses: {addresses}",
+                "whitelisted_addresses": addresses
+            }
+        except Exception as e:
+            raise Exception(f"Failed to update recipient whitelist: {str(e)}") from e

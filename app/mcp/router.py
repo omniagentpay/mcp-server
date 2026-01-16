@@ -1,11 +1,9 @@
 from typing import Any, Dict
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, HTTPException
 import structlog
 
 from app.mcp.schemas import MCPRequest, MCPResponse
 from app.mcp.registry import registry
-from app.db.session import get_db
 from app.utils.exceptions import PaymentError, GuardValidationError
 
 router = APIRouter()
@@ -17,7 +15,7 @@ INTERNAL_ERROR = -32603
 METHOD_NOT_FOUND = -32601
 
 @router.post("/rpc", response_model=MCPResponse)
-async def mcp_rpc_endpoint(request: MCPRequest, db: AsyncSession = Depends(get_db)):
+async def mcp_rpc_endpoint(request: MCPRequest):
     """
     Main MCP RPC entry point.
     Maps tool names to execution methods and normalizes errors.
@@ -31,7 +29,7 @@ async def mcp_rpc_endpoint(request: MCPRequest, db: AsyncSession = Depends(get_d
 
         # 1. Execute tool via registry
         # The registry handles tool lookup and execution
-        result = await registry.call(request.method, db, request.params or {})
+        result = await registry.call(request.method, request.params or {})
         
         return MCPResponse(result=result, id=request.id)
 

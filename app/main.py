@@ -5,14 +5,12 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import structlog
-from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.lifecycle import startup_event, shutdown_event
 from app.mcp.router import router as mcp_router
 from app.webhooks.circle import router as circle_webhook_router
-from app.db.session import engine
 import app.mcp.tools    # Register payment tools
 
 setup_logging()
@@ -22,7 +20,6 @@ logger = structlog.get_logger(__name__)
 async def lifespan(app: FastAPI):
     await startup_event(app)
     yield
-    await engine.dispose()
     await shutdown_event(app)
 
 app = FastAPI(
@@ -77,14 +74,5 @@ app.include_router(circle_webhook_router, prefix=f"{settings.API_V1_STR}/webhook
 
 @app.get("/health")
 async def health_check():
-    """Enhanced health check with DB connectivity verification."""
-    try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        return {"status": "ok", "database": "connected"}
-    except Exception as e:
-        logger.error("health_check_failed", error=str(e))
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"status": "error", "database": "disconnected"}
-        )
+    """Health check endpoint."""
+    return {"status": "ok"}

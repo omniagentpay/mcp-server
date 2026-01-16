@@ -22,21 +22,6 @@ class Settings(BaseSettings):
     OMNIAGENTPAY_RATE_LIMIT_PER_MIN: int = 5
     OMNIAGENTPAY_WHITELISTED_RECIPIENTS: List[str] = []
 
-    # Database
-    POSTGRES_SERVER: str = "localhost"
-    POSTGRES_USER: str = "mcp_user"
-    POSTGRES_PASSWORD: str = "postgres"
-    POSTGRES_DB: str = "mcp_db"
-    POSTGRES_PORT: str = "5432"
-    DATABASE_URL: str | None = None
-
-    @field_validator("DATABASE_URL", mode="before")
-    @classmethod
-    def assemble_db_connection(cls, v: str | None, info: any) -> any:
-        if isinstance(v, str):
-            return v
-        return f"postgresql+asyncpg://{info.data.get('POSTGRES_USER')}:{info.data.get('POSTGRES_PASSWORD')}@{info.data.get('POSTGRES_SERVER')}:{info.data.get('POSTGRES_PORT')}/{info.data.get('POSTGRES_DB')}"
-
     @field_validator("CIRCLE_API_KEY", "ENTITY_SECRET")
     @classmethod
     def validate_payment_secrets(cls, v: SecretStr | None, info: any) -> SecretStr | None:
