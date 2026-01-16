@@ -1,89 +1,95 @@
-from typing import List
-from app.payments.providers import PaymentProvider
-from app.payments.guards import PaymentGuard
-from app.wallets.service import WalletService
-from app.ledger.service import LedgerService
-from app.utils.exceptions import PaymentError
-import structlog
 import uuid
+import structlog
+from typing import Dict, Any, Optional
+from pydantic import BaseModel, Field, validator
+from app.payments.interfaces import AbstractPaymentClient
+from app.payments.omni_client import OmniAgentPaymentClient
+from app.utils.exceptions import PaymentError, GuardValidationError
 
 logger = structlog.get_logger(__name__)
 
-class PaymentService:
-    def __init__(
-        self, 
-        wallet_service: WalletService, 
-        ledger_service: LedgerService,
-        guards: List[PaymentGuard],
-        providers: dict[str, PaymentProvider]
-    ):
-        self.wallet_service = wallet_service
-        self.ledger_service = ledger_service
-        self.guards = guards
-        self.providers = providers
+class PaymentRequest(BaseModel):
+    """Schema for validating MCP tool input."""
+    from_wallet_id: str = Field(..., description="The source wallet ID")
+    to_address: str = Field(..., description="The recipient's blockchain address")
+    amount: str = Field(..., description="Amount to send (e.g., '10.50')")
+    currency: str = Field("USD", description="Currency code")
 
-    async def execute_guarded_payment(
-        self, 
-        amount: float, 
-        currency: str, 
-        source_wallet_id: str,
-        destination: str,
-        provider_type: str = "direct"
-    ):
-        logger.info("payment_initiated", amount=amount, currency=currency, source=source_wallet_id)
+    @validator("amount")
+    def validate_amount(cls, v):
+        try:
+            float_val = float(v)
+            if float_val <= 0:
+                raise ValueError("Amount must be positive")
+        except ValueError:
+            raise ValueError("Amount must be a valid numeric string")
+        return v
+
+class PaymentOrchestrator:
+    """ Orchestrates the payment flow: Validation -> Simulation -> Execution. """
+    
+    def __init__(self, client: AbstractPaymentClient):
+        self.client = client
+
+    async def pay(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Executes a guarded payment flow.
+        1. Validate Input
+        2. Run Simulation (Required)
+        3. Execute with Idempotency
+        """
+        # 1. Validate MCP tool input
+        try:
+            req = PaymentRequest(**request_data)
+        except Exception as e:
+            logger.error("invalid_payment_input", error=str(e))
+            raise PaymentError(f"Invalid input: {str(e)}")
+
+        # Generate idempotency key for this flow
+        idempotency_key = str(uuid.uuid4())
         
-        source_uuid = uuid.UUID(source_wallet_id)
+        logger.info("orchestrating_payment", 
+                    wallet_id=req.from_wallet_id, 
+                    amount=req.amount,
+                    idempotency_key=idempotency_key)
 
-        # 1. Validate payment intent and wallet existence (with lock for atomic check)
-        wallet = await self.wallet_service.get_wallet_for_update(source_uuid)
-        if not wallet:
-            raise PaymentError(f"Source wallet {source_wallet_id} not found")
-        
-        if wallet.balance < amount:
-            raise PaymentError(f"Insufficient funds in source wallet")
-
-        # 2. Run guard checks
-        for guard in self.guards:
-            await guard.validate(amount, source_wallet_id, recipient=destination)
-
-        # 3. Select payment provider
-        provider = self.providers.get(provider_type)
-        if not provider:
-            raise PaymentError(f"Unsupported payment provider: {provider_type}")
-
-        # 4. Record transaction in ledger (Initial pending state)
-        await self.ledger_service.record_transaction(
-            wallet_id=wallet.id,
-            amount=-amount,
-            entry_type="debit",
-            description=f"Payment to {destination}",
-            status="pending",
-            provider=provider_type,
-            intent={"amount": amount, "currency": currency, "destination": destination}
+        # 2. Simulation (REQUIRED before execution)
+        simulation = await self.client.simulate_payment(
+            from_wallet_id=req.from_wallet_id,
+            to_address=req.to_address,
+            amount=req.amount,
+            currency=req.currency
         )
 
-        # 5. Call provider
+        if simulation.get("status") != "success" or not simulation.get("validation_passed"):
+            logger.error("payment_simulation_failed", simulation=simulation)
+            raise GuardValidationError(f"Payment simulation failed: {simulation.get('reason', 'Unknown error')}")
+
+        # 3. Execution
         try:
-            provider_response = await provider.initiate_transfer(amount, currency, destination)
-            
-            # 6. Finalize ledger/wallet updates
-            # Atomic update within the same transaction
-            await self.ledger_service.record_transaction(
-                wallet_id=wallet.id,
-                amount=-amount,
-                entry_type="debit",
-                description=f"Payment completion: {destination}",
-                status="completed",
-                provider=provider_type,
-                result=provider_response
+            execution_result = await self.client.execute_payment(
+                from_wallet_id=req.from_wallet_id,
+                to_address=req.to_address,
+                amount=req.amount,
+                currency=req.currency
+                # In real SDK, we would pass idempotency_key here
             )
-            
-            # Use service update for consistency
-            await self.wallet_service.update_balance(wallet.id, -amount)
-            await self.ledger_service.db.commit()
-            
-            return provider_response
+
+            # 4. Return structured result (Stripping blockchain details)
+            return {
+                "status": "success",
+                "payment_id": execution_result.get("transfer_id"),
+                "amount": req.amount,
+                "currency": req.currency,
+                "message": "Payment processed successfully",
+                "idempotency_key": idempotency_key
+            }
+
         except Exception as e:
-            logger.error("payment_provider_failed", error=str(e))
-            # Handle rollback/failed state in ledger if necessary
-            raise PaymentError(f"Payment provider failed: {str(e)}")
+            logger.error("payment_execution_failed", error=str(e))
+            raise PaymentError(f"Payment execution failed: {str(e)}")
+
+async def get_payment_orchestrator() -> PaymentOrchestrator:
+    """Dependency provider for PaymentOrchestrator."""
+    client = await OmniAgentPaymentClient.get_instance()
+    return PaymentOrchestrator(client)

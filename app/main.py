@@ -9,19 +9,21 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.core.lifecycle import startup_event, shutdown_event
 from app.mcp.router import router as mcp_router
+from app.webhooks.circle import router as circle_webhook_router
 from app.db.session import engine
-import app.mcp.handlers # Register handlers
+import app.mcp.tools    # Register payment tools
 
 setup_logging()
 logger = structlog.get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting up MCP Server...", version="0.1.0")
+    await startup_event(app)
     yield
     await engine.dispose()
-    logger.info("Shutting down MCP Server...")
+    await shutdown_event(app)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -71,6 +73,7 @@ if settings.BACKEND_CORS_ORIGINS:
     )
 
 app.include_router(mcp_router, prefix=f"{settings.API_V1_STR}/mcp", tags=["mcp"])
+app.include_router(circle_webhook_router, prefix=f"{settings.API_V1_STR}/webhooks", tags=["webhooks"])
 
 @app.get("/health")
 async def health_check():

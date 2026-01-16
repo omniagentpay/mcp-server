@@ -1,59 +1,94 @@
 from abc import ABC, abstractmethod
-from typing import Set, Optional
+from typing import Set, Optional, Dict, Any, List
 import structlog
+from app.core.config import settings
 from app.utils.exceptions import (
     BudgetExceededError, 
     UnauthorizedRecipientError, 
-    RateLimitExceededError
+    RateLimitExceededError,
+    GuardValidationError
 )
 
 logger = structlog.get_logger(__name__)
 
 class PaymentGuard(ABC):
+    """Base class for all payment security guardrails."""
     @abstractmethod
     async def validate(self, amount: float, wallet_id: str, recipient: Optional[str] = None):
-        """
-        Validate if a payment can proceed.
-        Raises specialized GuardValidationError if checks fail.
-        """
+        pass
+
+    @abstractmethod
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert guard configuration to a dictionary for SDK registration."""
         pass
 
 class BudgetGuard(PaymentGuard):
-    def __init__(self, per_transaction_limit: float, daily_limit: float):
-        self.per_transaction_limit = per_transaction_limit
+    """Enforces daily and hourly spending limits."""
+    def __init__(self, daily_limit: float = settings.OMNIAGENTPAY_DAILY_BUDGET, hourly_limit: float = settings.OMNIAGENTPAY_HOURLY_BUDGET):
         self.daily_limit = daily_limit
+        self.hourly_limit = hourly_limit
 
     async def validate(self, amount: float, wallet_id: str, recipient: Optional[str] = None):
-        # 1. Per-transaction check
-        if amount > self.per_transaction_limit:
-            logger.warn("guard_violation", guard="BudgetGuard", reason="per_transaction_limit", amount=amount)
-            raise BudgetExceededError(f"Amount {amount} exceeds per-transaction limit of {self.per_transaction_limit}")
-        
-        # 2. Daily limit check (Logic placeholder for ledger/DB query)
-        # current_daily_total = await get_daily_total(wallet_id)
-        # if current_daily_total + amount > self.daily_limit:
-        #     raise BudgetExceededError("Daily spending limit reached")
-        
-        logger.info("guard_passed", guard="BudgetGuard", amount=amount)
+        # Implementation would check against ledger/cache
+        # For now, it defines the policy to be enforced by OmniAgentPay
+        pass
 
-class AllowlistGuard(PaymentGuard):
-    def __init__(self, approved_recipients: Set[str]):
-        self.approved_recipients = approved_recipients
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": "budget",
+            "daily_limit": self.daily_limit,
+            "hourly_limit": self.hourly_limit
+        }
+
+class SingleTransactionGuard(PaymentGuard):
+    """Limits the maximum amount for any single transaction."""
+    def __init__(self, tx_limit: float = settings.OMNIAGENTPAY_TX_LIMIT):
+        self.tx_limit = tx_limit
 
     async def validate(self, amount: float, wallet_id: str, recipient: Optional[str] = None):
-        if not recipient or recipient not in self.approved_recipients:
-            logger.warn("guard_violation", guard="AllowlistGuard", recipient=recipient)
-            raise UnauthorizedRecipientError(recipient or "Unknown")
-        
-        logger.info("guard_passed", guard="AllowlistGuard", recipient=recipient)
+        if amount > self.tx_limit:
+            raise BudgetExceededError(f"Transaction exceeds limit of {self.tx_limit}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": "single_transaction",
+            "max_amount": self.tx_limit
+        }
 
 class RateLimitGuard(PaymentGuard):
-    def __init__(self, max_requests_per_minute: int):
-        self.max_requests_per_minute = max_requests_per_minute
-        # Placeholder for state tracking (e.g. Redis or local cache)
+    """Limits the number of transactions per minute."""
+    def __init__(self, requests_per_min: int = settings.OMNIAGENTPAY_RATE_LIMIT_PER_MIN):
+        self.requests_per_min = requests_per_min
 
     async def validate(self, amount: float, wallet_id: str, recipient: Optional[str] = None):
-        # Implementation of rate limiting logic
-        # if too_many_requests:
-        #     raise RateLimitExceededError()
-        logger.info("guard_passed", guard="RateLimitGuard")
+        pass
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": "rate_limit",
+            "requests_per_minute": self.requests_per_min
+        }
+
+class RecipientWhitelistGuard(PaymentGuard):
+    """Restricts payments to a pre-approved list of addresses."""
+    def __init__(self, whitelisted_addresses: List[str] = settings.OMNIAGENTPAY_WHITELISTED_RECIPIENTS):
+        self.whitelisted_addresses = whitelisted_addresses
+
+    async def validate(self, amount: float, wallet_id: str, recipient: Optional[str] = None):
+        if self.whitelisted_addresses and recipient not in self.whitelisted_addresses:
+            raise UnauthorizedRecipientError(recipient or "Unknown")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": "recipient_whitelist",
+            "addresses": self.whitelisted_addresses
+        }
+
+def get_default_guards() -> List[PaymentGuard]:
+    """Returns the set of default guards as configured in the environment."""
+    return [
+        BudgetGuard(),
+        SingleTransactionGuard(),
+        RateLimitGuard(),
+        RecipientWhitelistGuard()
+    ]

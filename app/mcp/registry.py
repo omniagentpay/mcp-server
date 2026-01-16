@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Type
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.mcp.schemas import ToolDefinition
 
 logger = structlog.get_logger(__name__)
@@ -22,7 +23,7 @@ class BaseTool(ABC):
         pass
 
     @abstractmethod
-    async def execute(self, **kwargs) -> Any:
+    async def execute(self, db: AsyncSession, **kwargs) -> Any:
         pass
 
 class ToolRegistry:
@@ -35,10 +36,10 @@ class ToolRegistry:
         logger.info("tool_registered", name=tool_instance.name)
         return tool_class
 
-    async def call(self, name: str, params: Dict[str, Any]) -> Any:
+    async def call(self, name: str, db: AsyncSession, params: Dict[str, Any]) -> Any:
         if name not in self._tools:
             raise ValueError(f"Tool {name} not found")
-        return await self._tools[name].execute(**params)
+        return await self._tools[name].execute(db=db, **params)
 
     def get_definitions(self) -> List[ToolDefinition]:
         return [

@@ -1,0 +1,211 @@
+import uuid
+from typing import Any, Dict, Optional
+import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.mcp.registry import registry, BaseTool
+from app.payments.service import get_payment_orchestrator
+from app.payments.omni_client import OmniAgentPaymentClient
+from app.wallets.service import WalletService
+
+logger = structlog.get_logger(__name__)
+
+@registry.register
+class CreateAgentWalletTool(BaseTool):
+    @property
+    def name(self) -> str:
+        return "create_agent_wallet"
+
+    @property
+    def description(self) -> str:
+        return "Create a new managed wallet for an AI agent with default guardrails"
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "agent_name": {"type": "string", "description": "The name of the agent for whom the wallet is created"}
+            },
+            "required": ["agent_name"]
+        }
+
+    async def execute(self, db: AsyncSession, agent_name: str) -> Dict[str, Any]:
+        logger.info("mcp_tool_call", tool=self.name, agent_name=agent_name)
+        client = await OmniAgentPaymentClient.get_instance()
+        try:
+            result = await client.create_agent_wallet(agent_name)
+            return {"status": "success", "wallet": result}
+        except Exception as e:
+            logger.error("create_wallet_tool_failed", error=str(e))
+            return {"status": "error", "message": str(e)}
+
+@registry.register
+class PayRecipientTool(BaseTool):
+    @property
+    def name(self) -> str:
+        return "pay_recipient"
+
+    @property
+    def description(self) -> str:
+        return "Send a payment to a recipient address. Requires a prior simulation."
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "from_wallet_id": {"type": "string", "description": "Source wallet ID"},
+                "to_address": {"type": "string", "description": "Recipient blockchain address"},
+                "amount": {"type": "string", "description": "Amount to send as a numeric string"},
+                "currency": {"type": "string", "description": "Currency code (default: USD)", "default": "USD"}
+            },
+            "required": ["from_wallet_id", "to_address", "amount"]
+        }
+
+    async def execute(self, db: AsyncSession, **kwargs) -> Dict[str, Any]:
+        logger.info("mcp_tool_call", tool=self.name, **kwargs)
+        orchestrator = await get_payment_orchestrator()
+        try:
+            result = await orchestrator.pay(kwargs)
+            return result
+        except Exception as e:
+            logger.error("pay_recipient_tool_failed", error=str(e))
+            return {"status": "error", "message": str(e)}
+
+@registry.register
+class SimulatePaymentTool(BaseTool):
+    @property
+    def name(self) -> str:
+        return "simulate_payment"
+
+    @property
+    def description(self) -> str:
+        return "Simulate a payment to validate guardrails and estimate success without moving funds"
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "from_wallet_id": {"type": "string", "description": "Source wallet ID"},
+                "to_address": {"type": "string", "description": "Recipient blockchain address"},
+                "amount": {"type": "string", "description": "Amount to simulate"},
+                "currency": {"type": "string", "description": "Currency code (default: USD)", "default": "USD"}
+            },
+            "required": ["from_wallet_id", "to_address", "amount"]
+        }
+
+    async def execute(self, db: AsyncSession, from_wallet_id: str, to_address: str, amount: str, currency: str = "USD") -> Dict[str, Any]:
+        logger.info("mcp_tool_call", tool=self.name, from_wallet_id=from_wallet_id, amount=amount)
+        client = await OmniAgentPaymentClient.get_instance()
+        try:
+            result = await client.simulate_payment(
+                from_wallet_id=from_wallet_id,
+                to_address=to_address,
+                amount=amount,
+                currency=currency
+            )
+            return {"status": "success", "simulation": result}
+        except Exception as e:
+            logger.error("simulate_payment_tool_failed", error=str(e))
+            return {"status": "error", "message": str(e)}
+
+@registry.register
+class CreatePaymentIntentTool(BaseTool):
+    @property
+    def name(self) -> str:
+        return "create_payment_intent"
+
+    @property
+    def description(self) -> str:
+        return "Create a payment intent for later confirmation"
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "wallet_id": {"type": "string", "description": "Source wallet ID"},
+                "recipient": {"type": "string", "description": "Recipient address or identifier"},
+                "amount": {"type": "string", "description": "Amount for the intent"},
+                "currency": {"type": "string", "description": "Currency code (default: USD)", "default": "USD"},
+                "metadata": {"type": "object", "description": "Optional metadata for the intent"}
+            },
+            "required": ["wallet_id", "recipient", "amount"]
+        }
+
+    async def execute(self, db: AsyncSession, wallet_id: str, recipient: str, amount: str, currency: str = "USD", metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        logger.info("mcp_tool_call", tool=self.name, amount=amount)
+        client = await OmniAgentPaymentClient.get_instance()
+        try:
+            result = await client.create_payment_intent(
+                wallet_id=wallet_id,
+                recipient=recipient,
+                amount=amount, 
+                currency=currency, 
+                metadata=metadata
+            )
+            return {"status": "success", "intent": result}
+        except Exception as e:
+            logger.error("create_intent_tool_failed", error=str(e))
+            return {"status": "error", "message": str(e)}
+
+@registry.register
+class ConfirmPaymentIntentTool(BaseTool):
+    @property
+    def name(self) -> str:
+        return "confirm_payment_intent"
+
+    @property
+    def description(self) -> str:
+        return "Confirm and capture a previously created payment intent"
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "intent_id": {"type": "string", "description": "The ID of the payment intent to confirm"}
+            },
+            "required": ["intent_id"]
+        }
+
+    async def execute(self, db: AsyncSession, intent_id: str) -> Dict[str, Any]:
+        logger.info("mcp_tool_call", tool=self.name, intent_id=intent_id)
+        client = await OmniAgentPaymentClient.get_instance()
+        try:
+            result = await client.confirm_intent(intent_id)
+            return {"status": "success", "confirmation": result}
+        except Exception as e:
+            logger.error("confirm_intent_tool_failed", error=str(e))
+            return {"status": "error", "message": str(e)}
+
+@registry.register
+class CheckBalanceTool(BaseTool):
+    @property
+    def name(self) -> str:
+        return "check_balance"
+
+    @property
+    def description(self) -> str:
+        return "Check the current USDC balance of a Circle wallet (the actual balance used for payments)"
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "wallet_id": {"type": "string", "description": "Circle wallet ID to check"}
+            },
+            "required": ["wallet_id"]
+        }
+
+    async def execute(self, db: AsyncSession, wallet_id: str) -> Dict[str, Any]:
+        logger.info("mcp_tool_call", tool=self.name, wallet_id=wallet_id)
+        client = await OmniAgentPaymentClient.get_instance()
+        try:
+            result = await client.get_wallet_usdc_balance(wallet_id)
+            return {"status": "success", **result}
+        except Exception as e:
+            logger.error("check_balance_tool_failed", error=str(e))
+            return {"status": "error", "message": str(e)}

@@ -10,6 +10,10 @@ from alembic import context
 # Import our app's settings and metadata
 from app.core.config import settings
 from app.db.base import Base
+# Import all models for Alembic autogenerate
+from app.wallets.models import Wallet
+from app.ledger.models import LedgerEntry
+from app.db.ledger import PaymentLedger
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
