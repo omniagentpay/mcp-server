@@ -164,6 +164,8 @@ alembic_migrations/versions/*.py
 omniagentpay-*/
 *.whl
 *.tar.gz
+# Exception: Allow omniagentpay package for Cloud Build deployment
+!omniagentpay-0.0.1.tar.gz
 
 # Temporary test scripts in root
 test_fastmcp.py

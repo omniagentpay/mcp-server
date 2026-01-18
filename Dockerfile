@@ -13,8 +13,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Copy local omniagentpay source directory
-COPY omniagentpay-0.0.1/omniagentpay/ /usr/local/lib/python3.11/site-packages/omniagentpay/
+# Copy and extract omniagentpay from tar.gz (more reliable for Cloud Build)
+COPY omniagentpay-0.0.1.tar.gz /tmp/
+RUN mkdir -p /tmp/omniagentpay-extract && \
+    tar -xzf /tmp/omniagentpay-0.0.1.tar.gz -C /tmp/omniagentpay-extract && \
+    mkdir -p /usr/local/lib/python3.11/site-packages/omniagentpay && \
+    cp -r /tmp/omniagentpay-extract/omniagentpay-0.0.1/omniagentpay/* /usr/local/lib/python3.11/site-packages/omniagentpay/
 
 # Install Python dependencies
 # Install omniagentpay dependencies first (from pyproject.toml), then other requirements

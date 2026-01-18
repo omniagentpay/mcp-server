@@ -30,8 +30,9 @@ build/
 !omniagentpay-*.whl
 *.tar.gz
 !omniagentpay-*.tar.gz
-# Allow omniagentpay source directory
+# Explicitly allow omniagentpay source directory and all its contents
 !omniagentpay-0.0.1/
+!omniagentpay-0.0.1/**
 
 # Documentation
 *.md
