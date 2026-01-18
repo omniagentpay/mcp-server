@@ -159,3 +159,26 @@ cython_debug/
 # Alembic migrations
 alembic_migrations/versions/*.py
 !alembic_migrations/versions/__init__.py
+
+# Build artifacts
+omniagentpay-*/
+*.whl
+*.tar.gz
+
+# Temporary test scripts in root
+test_fastmcp.py
+create_secret.py
+setup_auth_token.sh
+ALL_CURL_COMMANDS.sh
+test_curl_commands.sh
+TEST_ALL_TOOLS.sh
+
+# Debug and temporary documentation
+DEBUG_AUTH.md
+DIAGNOSE_WALLET.md
+FIX_INVALID_ADDRESS.md
+ALL_CURL_COMMANDS_COPY_PASTE.md
+QUICK_TEST.md
+MIGRATION_TO_FASTMCP.md
+COMPLETE_CURL_COMMANDS.md
+CURL_COMMANDS.md
