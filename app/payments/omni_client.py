@@ -106,6 +106,21 @@ class OmniAgentPaymentClient(AbstractPaymentClient):
         amount: str, 
         currency: str = "USD"
     ) -> Dict[str, Any]:
+        # Ensure wallet exists - router needs it for network detection
+        try:
+            wallet_info = await self._client.get_wallet(from_wallet_id)
+            logger.info("wallet_found", 
+                       wallet_id=from_wallet_id, 
+                       blockchain=wallet_info.blockchain,
+                       address=wallet_info.address)
+        except Exception as wallet_err:
+            logger.error("wallet_not_found", wallet_id=from_wallet_id, error=str(wallet_err))
+            raise Exception(
+                f"Wallet not found: {from_wallet_id}. "
+                f"Please verify the wallet_id is correct. "
+                f"Create a wallet using 'create_agent_wallet' tool if needed."
+            ) from wallet_err
+        
         result = await self._client.simulate(
             wallet_id=from_wallet_id,
             recipient=to_address,
@@ -176,6 +191,13 @@ class OmniAgentPaymentClient(AbstractPaymentClient):
             kwargs = {k: v for k, v in metadata.items() if k != "purpose"}
         
         try:
+            # Verify wallet exists and get its network for better error messages
+            try:
+                wallet_info = await self._client.wallet.get_wallet(wallet_id)
+                logger.debug("wallet_info", wallet_id=wallet_id, blockchain=wallet_info.blockchain if wallet_info else None)
+            except Exception as wallet_err:
+                logger.warning("wallet_lookup_failed", wallet_id=wallet_id, error=str(wallet_err))
+            
             result = await self._client.create_payment_intent(
                 wallet_id=wallet_id,
                 recipient=recipient,
@@ -191,6 +213,10 @@ class OmniAgentPaymentClient(AbstractPaymentClient):
             }
         except Exception as e:
             error_msg = str(e)
+            logger.error("create_payment_intent_error", 
+                        wallet_id=wallet_id, 
+                        recipient=recipient[:20] if recipient else None,
+                        error=error_msg)
             # Provide helpful message for insufficient balance
             if "no USDC balance" in error_msg.lower() or "balance check failed" in error_msg.lower():
                 # Get wallet balance for better error message
