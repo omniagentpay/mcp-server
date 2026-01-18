@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: str = "secret"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
+    
+    # FastMCP Authentication
+    MCP_AUTH_ENABLED: bool = True
+    MCP_AUTH_TOKEN: SecretStr | None = None  # Bearer token for API clients
+    MCP_JWT_SECRET: SecretStr | None = None  # JWT secret for token verification
+    MCP_REQUIRE_AUTH: bool = True  # Require auth for all tools
 
     # CORS
     BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []

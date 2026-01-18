@@ -9,18 +9,24 @@ import structlog
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.lifecycle import startup_event, shutdown_event
-from app.mcp.router import router as mcp_router
+from app.mcp.fastmcp_server import mcp
 from app.webhooks.circle import router as circle_webhook_router
-import app.mcp.tools    # Register payment tools
 
 setup_logging()
 logger = structlog.get_logger(__name__)
 
+# Create FastMCP app first to get its lifespan
+mcp_app = mcp.http_app(path="/", stateless_http=True)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await startup_event(app)
-    yield
-    await shutdown_event(app)
+    # Start FastMCP lifespan (it's a function that returns async context manager)
+    async with mcp_app.lifespan(app):
+        # Start our custom startup
+        await startup_event(app)
+        yield
+        # Shutdown our custom logic
+        await shutdown_event(app)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -69,7 +75,11 @@ if settings.BACKEND_CORS_ORIGINS:
         allow_headers=["*"],
     )
 
-app.include_router(mcp_router, prefix=f"{settings.API_V1_STR}/mcp", tags=["mcp"])
+# Mount FastMCP server at /mcp endpoint (stateless mode for horizontal scaling)
+# Note: path="/" because FastAPI mount strips the /mcp prefix
+app.mount("/mcp", mcp_app)
+
+# Include webhook router
 app.include_router(circle_webhook_router, prefix=f"{settings.API_V1_STR}/webhooks", tags=["webhooks"])
 
 @app.get("/health")

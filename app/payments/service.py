@@ -1,7 +1,7 @@
 import uuid
 import structlog
 from typing import Dict, Any, Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from app.payments.interfaces import AbstractPaymentClient
 from app.payments.omni_client import OmniAgentPaymentClient
 from app.utils.exceptions import PaymentError, GuardValidationError
@@ -15,7 +15,8 @@ class PaymentRequest(BaseModel):
     amount: str = Field(..., description="Amount to send (e.g., '10.50')")
     currency: str = Field("USD", description="Currency code")
 
-    @validator("amount")
+    @field_validator("amount")
+    @classmethod
     def validate_amount(cls, v):
         try:
             float_val = float(v)
