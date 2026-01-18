@@ -27,7 +27,11 @@ htmlcov/
 dist/
 build/
 *.whl
+!omniagentpay-*.whl
 *.tar.gz
+!omniagentpay-*.tar.gz
+# Allow omniagentpay source directory
+!omniagentpay-0.0.1/
 
 # Documentation
 *.md
@@ -57,6 +61,9 @@ test_*.py
 
 # Scripts (keep only essential ones)
 *.sh
+*.py
+!app/**/*.py
+!start.py
 !setup_auth_token.sh
 !start.sh
 !deploy.sh

@@ -47,6 +47,12 @@ gcloud secrets create mcp-jwt-secret --data-file=- <<< "your_jwt_secret"
 gcloud secrets create omniagentpay-webhook-secret --data-file=- <<< "your_webhook_secret"
 ```
 
+## ⚠️ Important: Set Environment Variables First
+
+**Before deploying**, ensure you set the required environment variables. The application will fail to start in production mode if `CIRCLE_API_KEY` or `ENTITY_SECRET` are missing.
+
+For initial testing, you can set `ENVIRONMENT=dev` to skip production validation.
+
 ## Deployment Methods
 
 ### Method 1: Using Deployment Script (Recommended)
@@ -79,7 +85,7 @@ gcloud builds submit --config cloudbuild.yaml \
 docker build -t gcr.io/YOUR_PROJECT_ID/omniagentpay-mcp-server .
 docker push gcr.io/YOUR_PROJECT_ID/omniagentpay-mcp-server
 
-# Deploy to Cloud Run
+# Deploy to Cloud Run with required environment variables
 gcloud run deploy omniagentpay-mcp-server \
   --image gcr.io/YOUR_PROJECT_ID/omniagentpay-mcp-server \
   --platform managed \
@@ -88,8 +94,10 @@ gcloud run deploy omniagentpay-mcp-server \
   --port 8080 \
   --memory 512Mi \
   --cpu 1 \
-  --set-env-vars ENVIRONMENT=prod
+  --set-env-vars ENVIRONMENT=prod,CIRCLE_API_KEY=your_key,ENTITY_SECRET=your_secret
 ```
+
+**Note:** Replace `your_key` and `your_secret` with actual values, or use Secret Manager (recommended).
 
 ## Configure Secrets
 
@@ -110,11 +118,14 @@ gcloud run services update omniagentpay-mcp-server \
     ENVIRONMENT=prod,\
     CIRCLE_API_KEY=your_key,\
     ENTITY_SECRET=your_secret,\
+    MCP_AUTH_ENABLED=true,\
     MCP_AUTH_TOKEN=your_token,\
     OMNIAGENTPAY_DAILY_BUDGET=1000.0,\
     OMNIAGENTPAY_HOURLY_BUDGET=200.0,\
     OMNIAGENTPAY_TX_LIMIT=500.0
 ```
+
+**Note:** The `deploy.sh` script automatically reads `MCP_AUTH_ENABLED` and `MCP_AUTH_TOKEN` from your `.env` file if it exists.
 
 ## Verify Deployment
 
@@ -152,7 +163,8 @@ Required for production:
 - `ENVIRONMENT=prod`
 - `CIRCLE_API_KEY`
 - `ENTITY_SECRET`
-- `MCP_AUTH_TOKEN` or `MCP_JWT_SECRET`
+- `MCP_AUTH_ENABLED=true` (enables authentication)
+- `MCP_AUTH_TOKEN` or `MCP_JWT_SECRET` (required if `MCP_AUTH_ENABLED=true`)
 - `OMNIAGENTPAY_WEBHOOK_SECRET` (if using webhooks)
 - `OMNIAGENTPAY_MERCHANT_ID` (if using webhooks)
 
@@ -183,12 +195,48 @@ gcloud run services describe omniagentpay-mcp-server \
 
 ## Troubleshooting
 
+### Container failed to start and listen on PORT
+
+**Error:** "The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable"
+
+**Solutions:**
+1. **Check application logs:**
+   ```bash
+   gcloud run services logs read omniagentpay-mcp-server --region us-central1 --limit 100
+   ```
+
+2. **Verify required environment variables are set:**
+   - In production (`ENVIRONMENT=prod`), the app requires:
+     - `CIRCLE_API_KEY`
+     - `ENTITY_SECRET`
+   - If these are missing, the app will fail to start during validation
+
+3. **Set environment variables before deployment:**
+   ```bash
+   gcloud run services update omniagentpay-mcp-server \
+     --region us-central1 \
+     --set-env-vars ENVIRONMENT=prod,CIRCLE_API_KEY=your_key,ENTITY_SECRET=your_secret
+   ```
+
+4. **For initial testing, use dev mode:**
+   ```bash
+   gcloud run services update omniagentpay-mcp-server \
+     --region us-central1 \
+     --set-env-vars ENVIRONMENT=dev
+   ```
+
+5. **Check that PORT is being read correctly:**
+   - The startup script (`start.py`) automatically reads the PORT environment variable
+   - Cloud Run sets PORT automatically (usually 8080)
+   - No manual PORT configuration needed
+
 ### Service won't start
 
 1. Check logs: `gcloud run services logs read omniagentpay-mcp-server --region us-central1`
 2. Verify environment variables are set correctly
 3. Check that secrets are accessible
 4. Ensure PORT environment variable is available (Cloud Run sets this automatically)
+5. **Common issue:** Missing `CIRCLE_API_KEY` or `ENTITY_SECRET` in production mode causes startup failure
 
 ### Authentication errors
 

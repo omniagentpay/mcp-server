@@ -46,7 +46,7 @@ steps:
       - '--timeout'
       - '${_TIMEOUT:-300}'
       - '--set-env-vars'
-      - 'ENVIRONMENT=prod'
+      - 'ENVIRONMENT=prod,MCP_AUTH_ENABLED=${_MCP_AUTH_ENABLED:-true},MCP_AUTH_TOKEN=${_MCP_AUTH_TOKEN}'
     id: 'deploy-cloud-run'
     waitFor: ['push-image']
 
@@ -66,3 +66,5 @@ substitutions:
   _MIN_INSTANCES: '0'
   _MAX_INSTANCES: '10'
   _TIMEOUT: '300'
+  _MCP_AUTH_ENABLED: 'true'
+  _MCP_AUTH_TOKEN: '9507b8047086f29f78dcdf3b188f52fedb2dfd831053c723901d328e00537277'
