@@ -2,6 +2,8 @@
 
 Production-ready FastMCP server exposing OmniAgentPay payment tools via Model Context Protocol (MCP).
 
+**Version:** 0.1.0 | [Release Notes](RELEASE.md) | [Testing Guide](TESTING.md) | [Troubleshooting](TROUBLESHOOTING.md)
+
 ## Tech Stack
 - Python 3.11+
 - FastMCP (MCP protocol implementation)
@@ -149,3 +151,14 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 - Bearer token or JWT verification supported
 - Stateless design prevents session-based attacks
 - Input validation via Pydantic schemas
+
+## Documentation
+
+- **[RELEASE.md](RELEASE.md)**: Release notes, version history, and upgrade instructions
+- **[TESTING.md](TESTING.md)**: Testing guide and examples
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)**: Common issues and solutions
+- **[SETUP_AUTH.md](SETUP_AUTH.md)**: Authentication setup guide
+
+## License
+
+See [LICENSE](LICENSE) file for details.
